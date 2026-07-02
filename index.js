@@ -20,10 +20,12 @@ const SESSIONS = [
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
 let priceCache = {};
-let lastSignalTime = {}; // prevent signal spam — one signal per asset per 5 mins
+let lastSignalTime = {};      // cooldown per asset
+let lastSignalKey  = {};      // last direction+price key to block exact duplicates
 let consecutiveLosses = 0;
 let isLockedOut = false;
 let lockoutDate = null;
+let scanLock = false;         // prevent overlapping scans
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 function getWATHour() {
@@ -150,49 +152,65 @@ async function saveTrade(trade) {
 
 // ─── MAIN SCAN ────────────────────────────────────────────────────────────────
 async function scanMarket() {
-  // Reset lockout on new day
-  const today = getToday();
-  if (lockoutDate && lockoutDate !== today) {
-    consecutiveLosses = 0;
-    isLockedOut       = false;
-    lockoutDate       = null;
-    console.log('New day — lockout reset');
-  }
-
-  const session = getCurrentSession();
-  if (!session) {
-    console.log(`[${getWATTime()}] Dead zone — no scan`);
+  // Prevent overlapping scans
+  if (scanLock) {
+    console.log(`[${getWATTime()}] Scan already running — skipping`);
     return;
   }
+  scanLock = true;
 
-  if (isLockedOut) {
-    console.log(`[${getWATTime()}] Locked out — 3 losses hit`);
-    return;
-  }
-
-  console.log(`[${getWATTime()}] Scanning — Session: ${session.name}`);
-
-  for (const asset of ASSETS) {
-    const candles = await fetchCandles(asset);
-    if (!candles) continue;
-
-    priceCache[asset] = candles;
-
-    const signal = analyzeSignal(candles);
-    if (!signal) {
-      console.log(`  ${asset}: No signal`);
-      continue;
+  try {
+    // Reset lockout on new day
+    const today = getToday();
+    if (lockoutDate && lockoutDate !== today) {
+      consecutiveLosses = 0;
+      isLockedOut       = false;
+      lockoutDate       = null;
+      console.log('New day — lockout reset');
     }
 
-    // Cooldown — no repeat signal for same asset within 5 minutes
-    const now     = Date.now();
-    const lastSig = lastSignalTime[asset] || 0;
-    if (now - lastSig < 5 * 60 * 1000) {
-      console.log(`  ${asset}: Signal cooldown active`);
-      continue;
+    const session = getCurrentSession();
+    if (!session) {
+      console.log(`[${getWATTime()}] Dead zone — no scan`);
+      return;
     }
 
-    lastSignalTime[asset] = now;
+    if (isLockedOut) {
+      console.log(`[${getWATTime()}] Locked out — 3 losses hit`);
+      return;
+    }
+
+    console.log(`[${getWATTime()}] Scanning — Session: ${session.name}`);
+
+    for (const asset of ASSETS) {
+      const candles = await fetchCandles(asset);
+      if (!candles) continue;
+
+      priceCache[asset] = candles;
+
+      const signal = analyzeSignal(candles);
+      if (!signal) {
+        console.log(`  ${asset}: No signal`);
+        continue;
+      }
+
+      // Cooldown — no repeat signal for same asset within 10 minutes
+      const now     = Date.now();
+      const lastSig = lastSignalTime[asset] || 0;
+      if (now - lastSig < 10 * 60 * 1000) {
+        console.log(`  ${asset}: Cooldown active (${Math.round((10*60*1000 - (now-lastSig))/1000)}s remaining)`);
+        continue;
+      }
+
+      // Exact duplicate check — same direction + same price = skip
+      const sigKey = `${signal.direction}-${signal.price.toFixed(5)}`;
+      if (lastSignalKey[asset] === sigKey) {
+        console.log(`  ${asset}: Duplicate signal blocked`);
+        continue;
+      }
+
+      lastSignalTime[asset] = now;
+      lastSignalKey[asset]  = sigKey;
 
     const arrow = signal.direction === 'BUY' ? '▲' : '▼';
     const emoji = signal.direction === 'BUY' ? '🟢' : '🔴';
@@ -219,7 +237,10 @@ async function scanMarket() {
       result:     null,
     });
 
-    console.log(`  ${asset}: ${signal.direction} signal fired and sent`);
+      console.log(`  ${asset}: ${signal.direction} signal fired and sent`);
+    }
+  } finally {
+    scanLock = false;
   }
 }
 
