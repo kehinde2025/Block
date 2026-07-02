@@ -3,111 +3,117 @@ const express = require('express');
 const app = express();
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
-const TWELVE_KEY    = process.env.TWELVE_KEY    || '5effd4b99536477fa19f3dc37f5c9af1';
+const TWELVE_KEY     = process.env.TWELVE_KEY     || '5effd4b99536477fa19f3dc37f5c9af1';
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || '7710816793:AAE0obDgajHgJ1EaDM6cDzWzGkij80ToaW0';
-const CHAT_ID       = process.env.CHAT_ID       || '7974144973';
-const SUPABASE_URL  = process.env.SUPABASE_URL  || 'https://cxjpbfzpvopykwxtqetn.supabase.co';
-const SUPABASE_KEY  = process.env.SUPABASE_KEY  || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN4anBiZnpwdm9weWt3eHRxZXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY5MTgsImV4cCI6MjA5NjY1MjkxOH0.JYFoXLJsbF_Ij_haj5IZQO9LCGnt839o7xpQRe17W8E';
+const CHAT_ID        = process.env.CHAT_ID        || '7974144973';
+const SUPABASE_URL   = process.env.SUPABASE_URL   || 'https://cxjpbfzpvopykwxtqetn.supabase.co';
+const SUPABASE_KEY   = process.env.SUPABASE_KEY   || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN4anBiZnpwdm9weWt3eHRxZXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY5MTgsImV4cCI6MjA5NjY1MjkxOH0.JYFoXLJsbF_Ij_haj5IZQO9LCGnt839o7xpQRe17W8E';
 
 const ASSETS = ['EUR/USD', 'GBP/USD'];
-const TWELVE_SYMBOLS = { 'EUR/USD': 'EUR/USD', 'GBP/USD': 'GBP/USD' };
 
-// WAT = UTC+1
 const SESSIONS = [
   { name: 'London Open',   label: 'LON', start: 8,  end: 11 },
   { name: 'New York Open', label: 'NYO', start: 14, end: 17 },
 ];
 
-// ─── STATE ────────────────────────────────────────────────────────────────────
-let priceCache = {};
-let lastSignalTime = {};      // cooldown per asset
-let lastSignalKey  = {};      // last direction+price key to block exact duplicates
-let consecutiveLosses = 0;
-let isLockedOut = false;
-let lockoutDate = null;
-let scanLock = false;         // prevent overlapping scans
+// ─── STRICT SIGNAL STATE ──────────────────────────────────────────────────────
+// Key insight: we track the CANDLE TIMESTAMP of the last signal per asset.
+// If the candle hasn't changed, we cannot fire again. Period.
+const state = {
+  lastCandleTime: {},    // asset -> last candle datetime string that fired a signal
+  sessionSignals: {},    // asset+session -> count of signals fired this session
+  consecutiveLosses: 0,
+  isLockedOut: false,
+  lockoutDate: null,
+  lastSessionLabel: null,
+};
 
-// ─── HELPERS ──────────────────────────────────────────────────────────────────
-function getWATHour() {
+// Max signals per pair per session — HARD CAP
+const MAX_SIGNALS_PER_SESSION = 2;
+
+// ─── TIME HELPERS ─────────────────────────────────────────────────────────────
+function getWAT() {
   const now = new Date();
   const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const wat = new Date(utc + 3600000);
-  return wat.getHours();
+  return new Date(utc + 3600000); // UTC+1
 }
+
+function getWATHour()  { return getWAT().getHours(); }
+function getWATTime()  { return getWAT().toTimeString().slice(0, 8) + ' WAT'; }
+function getToday()    { return getWAT().toDateString(); }
 
 function getCurrentSession() {
   const h = getWATHour();
   return SESSIONS.find(s => h >= s.start && h < s.end) || null;
 }
 
-function getWATTime() {
-  const now = new Date();
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const wat = new Date(utc + 3600000);
-  return wat.toTimeString().slice(0, 8) + ' WAT';
-}
-
-function getToday() {
-  const now = new Date();
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const wat = new Date(utc + 3600000);
-  return wat.toDateString();
-}
-
 // ─── PRICE FEED ───────────────────────────────────────────────────────────────
 async function fetchCandles(symbol) {
   try {
-    const sym = symbol.replace('/', '');
-    const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=1min&outputsize=10&apikey=${TWELVE_KEY}`;
+    const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=1min&outputsize=15&apikey=${TWELVE_KEY}`;
     const r = await fetch(url);
     const d = await r.json();
-    if (!d.values || d.values.length < 6) return null;
+    if (!d.values || d.values.length < 8) return null;
     return d.values.map(v => ({
-      open:   parseFloat(v.open),
-      high:   parseFloat(v.high),
-      low:    parseFloat(v.low),
-      close:  parseFloat(v.close),
-      volume: parseFloat(v.volume) || Math.random() * 1000 + 500,
-    })).reverse();
+      datetime: v.datetime,
+      open:     parseFloat(v.open),
+      high:     parseFloat(v.high),
+      low:      parseFloat(v.low),
+      close:    parseFloat(v.close),
+      volume:   parseFloat(v.volume) || 1000,
+    })).reverse(); // oldest first
   } catch(e) {
-    console.error(`Price fetch failed for ${symbol}:`, e.message);
+    console.error(`Fetch failed ${symbol}:`, e.message);
     return null;
   }
 }
 
-// ─── SIGNAL LOGIC ─────────────────────────────────────────────────────────────
+// ─── SIGNAL LOGIC (STRICTER) ──────────────────────────────────────────────────
 function analyzeSignal(candles) {
-  if (!candles || candles.length < 6) return null;
+  if (!candles || candles.length < 8) return null;
 
-  const current = candles[candles.length - 1];
-  const recent  = candles.slice(-6, -1);
+  const current  = candles[candles.length - 1]; // current candle
+  const prev5    = candles.slice(-6, -1);        // 5 candles before current
+  const prev10   = candles.slice(-11, -1);       // 10 candles before current
 
-  // Trigger 1: Momentum
-  const momentum    = current.close - current.open;
-  const avgBody     = recent.reduce((a, c) => a + Math.abs(c.close - c.open), 0) / recent.length;
-  const momentumFired = Math.abs(momentum) > avgBody * 0.6;
-  const momentumDir   = momentum > 0 ? 'BUY' : 'SELL';
+  // ── TRIGGER 1: Strong momentum ───────────────────────────────────────────
+  // Current candle body must be LARGER than average of last 10 candles
+  const currentBody = Math.abs(current.close - current.open);
+  const avgBody10   = prev10.reduce((a, c) => a + Math.abs(c.close - c.open), 0) / prev10.length;
+  const momentumFired = currentBody > avgBody10 * 1.2; // 20% stronger than average
+  const momentumDir   = current.close > current.open ? 'BUY' : 'SELL';
 
-  // Trigger 2: Volume
-  const avgVol    = recent.reduce((a, c) => a + c.volume, 0) / recent.length;
-  const volumeFired = current.volume > avgVol * 0.8;
+  // ── TRIGGER 2: Volume surge ───────────────────────────────────────────────
+  const avgVol5     = prev5.reduce((a, c) => a + c.volume, 0) / prev5.length;
+  const volumeFired = current.volume > avgVol5 * 1.1; // 10% above average
 
-  // Trigger 3: Trend — last 5 candles
-  const bullish   = recent.filter(c => c.close > c.open).length;
-  const bearish   = recent.filter(c => c.close < c.open).length;
+  // ── TRIGGER 3: Strong trend alignment ────────────────────────────────────
+  // At least 4 of last 5 candles must agree with direction
+  const bullCount = prev5.filter(c => c.close > c.open).length;
+  const bearCount = prev5.filter(c => c.close < c.open).length;
   let trendDir    = null;
   let trendFired  = false;
-  if (bullish >= 3) { trendDir = 'BUY';  trendFired = true; }
-  if (bearish >= 3) { trendDir = 'SELL'; trendFired = true; }
+  if (bullCount >= 4) { trendDir = 'BUY';  trendFired = true; }
+  if (bearCount >= 4) { trendDir = 'SELL'; trendFired = true; }
 
-  const allFired  = momentumFired && volumeFired && trendFired;
-  const dirAgree  = momentumDir === trendDir;
+  // ── TRIGGER 4: No whipsaw ─────────────────────────────────────────────────
+  // Previous candle must agree with direction (not a reversal candle)
+  const prevCandle     = prev5[prev5.length - 1];
+  const prevDir        = prevCandle.close > prevCandle.open ? 'BUY' : 'SELL';
+  const noWhipsawFired = prevDir === momentumDir;
+
+  // All 4 must fire AND directions must agree
+  const allFired = momentumFired && volumeFired && trendFired && noWhipsawFired;
+  const dirAgree = momentumDir === trendDir;
+
+  console.log(`    Momentum: ${momentumFired} (${momentumDir}) | Volume: ${volumeFired} | Trend: ${trendFired} (${trendDir}) | NoWhipsaw: ${noWhipsawFired}`);
 
   if (allFired && dirAgree) {
     return {
-      direction: momentumDir,
-      price:     current.close,
-      triggers:  { momentum: momentumDir, volume: true, trend: trendDir }
+      direction:   momentumDir,
+      price:       current.close,
+      candleTime:  current.datetime,
+      triggers:    { momentum: momentumDir, volume: true, trend: trendDir, noWhipsaw: true }
     };
   }
   return null;
@@ -116,20 +122,12 @@ function analyzeSignal(candles) {
 // ─── TELEGRAM ─────────────────────────────────────────────────────────────────
 async function sendTelegram(message) {
   try {
-    const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-    await fetch(url, {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        chat_id:    CHAT_ID,
-        text:       message,
-        parse_mode: 'HTML',
-      }),
+      body:    JSON.stringify({ chat_id: CHAT_ID, text: message, parse_mode: 'HTML' }),
     });
-    console.log('Telegram sent:', message.slice(0, 60));
-  } catch(e) {
-    console.error('Telegram failed:', e.message);
-  }
+  } catch(e) { console.error('Telegram failed:', e.message); }
 }
 
 // ─── SUPABASE ─────────────────────────────────────────────────────────────────
@@ -145,89 +143,85 @@ async function saveTrade(trade) {
       },
       body: JSON.stringify(trade),
     });
-  } catch(e) {
-    console.error('Supabase save failed:', e.message);
-  }
+  } catch(e) { console.error('Supabase failed:', e.message); }
 }
 
 // ─── MAIN SCAN ────────────────────────────────────────────────────────────────
 async function scanMarket() {
-  // Prevent overlapping scans
-  if (scanLock) {
-    console.log(`[${getWATTime()}] Scan already running — skipping`);
+  // Reset on new day
+  const today = getToday();
+  if (state.lockoutDate && state.lockoutDate !== today) {
+    state.consecutiveLosses = 0;
+    state.isLockedOut       = false;
+    state.lockoutDate       = null;
+    state.sessionSignals    = {};
+    console.log('New day — all state reset');
+  }
+
+  const session = getCurrentSession();
+  if (!session) {
+    // Reset session signal counts when dead zone starts
+    if (state.lastSessionLabel) {
+      state.sessionSignals  = {};
+      state.lastSessionLabel = null;
+    }
+    console.log(`[${getWATTime()}] Dead zone`);
     return;
   }
-  scanLock = true;
 
-  try {
-    // Reset lockout on new day
-    const today = getToday();
-    if (lockoutDate && lockoutDate !== today) {
-      consecutiveLosses = 0;
-      isLockedOut       = false;
-      lockoutDate       = null;
-      console.log('New day — lockout reset');
+  state.lastSessionLabel = session.label;
+
+  if (state.isLockedOut) {
+    console.log(`[${getWATTime()}] Locked out`);
+    return;
+  }
+
+  console.log(`[${getWATTime()}] Scanning — ${session.name}`);
+
+  for (const asset of ASSETS) {
+    const sessionKey = `${asset}-${session.label}`;
+
+    // Hard cap — max 2 signals per pair per session
+    const sigCount = state.sessionSignals[sessionKey] || 0;
+    if (sigCount >= MAX_SIGNALS_PER_SESSION) {
+      console.log(`  ${asset}: Session cap reached (${sigCount}/${MAX_SIGNALS_PER_SESSION})`);
+      continue;
     }
 
-    const session = getCurrentSession();
-    if (!session) {
-      console.log(`[${getWATTime()}] Dead zone — no scan`);
-      return;
+    const candles = await fetchCandles(asset);
+    if (!candles) continue;
+
+    const signal = analyzeSignal(candles);
+    if (!signal) {
+      console.log(`  ${asset}: No signal`);
+      continue;
     }
 
-    if (isLockedOut) {
-      console.log(`[${getWATTime()}] Locked out — 3 losses hit`);
-      return;
+    // CORE DUPLICATE PREVENTION: block if this exact candle already fired
+    if (state.lastCandleTime[asset] === signal.candleTime) {
+      console.log(`  ${asset}: Same candle already fired — blocked`);
+      continue;
     }
 
-    console.log(`[${getWATTime()}] Scanning — Session: ${session.name}`);
-
-    for (const asset of ASSETS) {
-      const candles = await fetchCandles(asset);
-      if (!candles) continue;
-
-      priceCache[asset] = candles;
-
-      const signal = analyzeSignal(candles);
-      if (!signal) {
-        console.log(`  ${asset}: No signal`);
-        continue;
-      }
-
-      // Cooldown — no repeat signal for same asset within 10 minutes
-      const now     = Date.now();
-      const lastSig = lastSignalTime[asset] || 0;
-      if (now - lastSig < 10 * 60 * 1000) {
-        console.log(`  ${asset}: Cooldown active (${Math.round((10*60*1000 - (now-lastSig))/1000)}s remaining)`);
-        continue;
-      }
-
-      // Exact duplicate check — same direction + same price = skip
-      const sigKey = `${signal.direction}-${signal.price.toFixed(5)}`;
-      if (lastSignalKey[asset] === sigKey) {
-        console.log(`  ${asset}: Duplicate signal blocked`);
-        continue;
-      }
-
-      lastSignalTime[asset] = now;
-      lastSignalKey[asset]  = sigKey;
+    // All checks passed — fire signal
+    state.lastCandleTime[asset]      = signal.candleTime;
+    state.sessionSignals[sessionKey] = sigCount + 1;
 
     const arrow = signal.direction === 'BUY' ? '▲' : '▼';
     const emoji = signal.direction === 'BUY' ? '🟢' : '🔴';
 
-    const message = `${emoji} <b>WEBBLOCK SIGNAL</b>
+    const message =
+`${emoji} <b>WEBBLOCK SIGNAL</b>
 
 <b>${arrow} ${signal.direction}</b> — ${asset}
 💰 Price: <code>${signal.price.toFixed(5)}</code>
 ⏱ Duration: <b>2 minutes</b>
-📍 Session: ${session.name}
+📍 Session: ${session.name} (${sigCount + 1}/${MAX_SIGNALS_PER_SESSION})
 🕐 Time: ${getWATTime()}
 
 <i>Enter within 10 seconds of candle open</i>`;
 
     await sendTelegram(message);
-
-    // Save to Supabase
     await saveTrade({
       asset,
       direction:  signal.direction,
@@ -237,67 +231,63 @@ async function scanMarket() {
       result:     null,
     });
 
-      console.log(`  ${asset}: ${signal.direction} signal fired and sent`);
-    }
-  } finally {
-    scanLock = false;
+    console.log(`  ✅ ${asset}: ${signal.direction} fired (${sigCount + 1}/${MAX_SIGNALS_PER_SESSION} this session)`);
   }
 }
 
-// ─── EXPRESS HEALTH CHECK ─────────────────────────────────────────────────────
+// ─── EXPRESS ──────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
   res.json({
-    status:    'WEBBLOCK Signal Bot running',
+    status:    'WEBBLOCK Signal Bot',
     time:      getWATTime(),
     session:   getCurrentSession()?.name || 'Dead Zone',
-    lockedOut: isLockedOut,
-    losses:    consecutiveLosses,
+    lockedOut: state.isLockedOut,
+    losses:    state.consecutiveLosses,
+    signals:   state.sessionSignals,
   });
 });
 
-// Webhook to receive WIN/LOSS from web app
 app.use(express.json());
 app.post('/result', async (req, res) => {
   const { result } = req.body;
-  if (!result) return res.status(400).json({ error: 'No result provided' });
+  if (!result) return res.status(400).json({ error: 'No result' });
 
   if (result === 'LOSS') {
-    consecutiveLosses++;
-    if (consecutiveLosses >= 3) {
-      isLockedOut = true;
-      lockoutDate = getToday();
-      await sendTelegram(`🔒 <b>SESSION LOCKED</b>\n\n3 consecutive losses. No more trades today.\n\nCome back tomorrow. Protect your capital.`);
+    state.consecutiveLosses++;
+    if (state.consecutiveLosses >= 3) {
+      state.isLockedOut = true;
+      state.lockoutDate = getToday();
+      await sendTelegram(`🔒 <b>SESSION LOCKED</b>\n\n3 consecutive losses. Done for today.\n\nProtect your capital. Come back tomorrow.`);
     } else {
-      await sendTelegram(`❌ Loss recorded. Consecutive losses: ${consecutiveLosses}/3`);
+      await sendTelegram(`❌ Loss recorded. Streak: ${state.consecutiveLosses}/3`);
     }
   } else if (result === 'WIN') {
-    consecutiveLosses = 0;
+    state.consecutiveLosses = 0;
     await sendTelegram(`✅ Win recorded. Streak reset.`);
   }
 
-  res.json({ ok: true, consecutiveLosses, isLockedOut });
+  res.json({ ok: true, consecutiveLosses: state.consecutiveLosses, isLockedOut: state.isLockedOut });
 });
 
 // ─── START ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`WEBBLOCK bot running on port ${PORT}`);
-  console.log(`WAT time: ${getWATTime()}`);
+  console.log(`WEBBLOCK bot running — ${getWATTime()}`);
   console.log(`Session: ${getCurrentSession()?.name || 'Dead Zone'}`);
 });
 
-// Scan every 60 seconds
+// Scan every 90 seconds — not 60. Gives candles time to close properly.
 scanMarket();
-setInterval(scanMarket, 60 * 1000);
+setInterval(scanMarket, 90 * 1000);
 
-// Session open alerts
+// Session alerts
 setInterval(async () => {
   const h = getWATHour();
-  const m = new Date().getMinutes();
+  const m = getWAT().getMinutes();
   if (m === 0) {
-    if (h === 8)  await sendTelegram('🟡 <b>London Open</b> — Session starting. Stay sharp.');
-    if (h === 14) await sendTelegram('🟡 <b>New York Open</b> — Session starting. Stay sharp.');
-    if (h === 11) await sendTelegram('⏸ London session closed. Dead zone until 2PM WAT.');
-    if (h === 17) await sendTelegram('⏹ All sessions closed. Done for today.');
+    if (h === 8)  await sendTelegram('🟡 <b>London Open</b> — Session live. Stay sharp.');
+    if (h === 11) await sendTelegram('⏸ <b>London closed.</b> Dead zone until 2PM WAT. Rest.');
+    if (h === 14) await sendTelegram('🟡 <b>New York Open</b> — Session live. Stay sharp.');
+    if (h === 17) await sendTelegram('⏹ <b>All sessions closed.</b> Done for today. Review your log.');
   }
 }, 60 * 1000);
