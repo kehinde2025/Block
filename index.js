@@ -63,12 +63,12 @@ function analyzeSignal(candles) {
   // T1: Body 10% stronger than 10-candle average
   const body    = Math.abs(current.close - current.open);
   const avgBody = prev10.reduce((a, c) => a + Math.abs(c.close - c.open), 0) / prev10.length;
-  const t1      = body > avgBody * 1.1;
+  const t1      = body > avgBody * 1.05;
   const dir     = current.close > current.open ? 'BUY' : 'SELL';
 
   // T2: Volume 10% above 5-candle average
   const avgVol  = prev5.reduce((a, c) => a + c.volume, 0) / prev5.length;
-  const t2      = current.volume > avgVol * 1.1;
+  const t2      = current.volume > avgVol * 1.05;
 
   // T3: 3 of last 5 candles agree with direction
   const bullCount = prev5.filter(c => c.close > c.open).length;
