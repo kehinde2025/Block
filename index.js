@@ -44,8 +44,9 @@ async function fetchCandles() {
     return d.values.map(v => ({
       datetime: v.datetime,
       open:     parseFloat(v.open),
+      high:     parseFloat(v.high),
+      low:      parseFloat(v.low),
       close:    parseFloat(v.close),
-      volume:   parseFloat(v.volume) || 1000,
     })).reverse();
   } catch(e) {
     console.error('Fetch failed:', e.message);
@@ -57,30 +58,34 @@ function analyzeSignal(candles) {
   if (!candles || candles.length < 12) return null;
 
   const current = candles[candles.length - 1];
-  const prev5   = candles.slice(-6, -1);
   const prev10  = candles.slice(-11, -1);
+  const prev5   = candles.slice(-6, -1);
 
-  // T1: Body 10% stronger than 10-candle average
+  // ── T1: Candle body strength ──────────────────────────────────────────────
+  // Current candle body must be 5% stronger than 10-candle average
   const body    = Math.abs(current.close - current.open);
   const avgBody = prev10.reduce((a, c) => a + Math.abs(c.close - c.open), 0) / prev10.length;
   const t1      = body > avgBody * 1.05;
   const dir     = current.close > current.open ? 'BUY' : 'SELL';
 
-  // T2: Volume 10% above 5-candle average
-  const avgVol  = prev5.reduce((a, c) => a + c.volume, 0) / prev5.length;
-  const t2      = current.volume > avgVol * 1.05;
+  // ── T2: Close position ratio ──────────────────────────────────────────────
+  // Where did price close inside the candle range?
+  // BUY: close must be in top 60% of range (ratio > 0.6)
+  // SELL: close must be in bottom 40% of range (ratio < 0.4)
+  const range    = current.high - current.low;
+  const closePos = range > 0 ? (current.close - current.low) / range : 0.5;
+  const t2       = dir === 'BUY' ? closePos > 0.6 : closePos < 0.4;
 
-  // T3: 3 of last 5 candles agree with direction
-  const bullCount = prev5.filter(c => c.close > c.open).length;
-  const bearCount = prev5.filter(c => c.close < c.open).length;
-  let trendDir = null;
-  let t3 = false;
-  if (bullCount >= 3) { trendDir = 'BUY';  t3 = true; }
-  if (bearCount >= 3) { trendDir = 'SELL'; t3 = true; }
+  // ── T3: Momentum slope ────────────────────────────────────────────────────
+  // Is price actually higher/lower than it was 5 candles ago?
+  const price5CandlesAgo = prev5[0].close;
+  const t3 = dir === 'BUY'
+    ? current.close > price5CandlesAgo
+    : current.close < price5CandlesAgo;
 
-  console.log(`  T1:${t1} T2:${t2} T3:${t3}(${trendDir}) DIR:${dir}`);
+  console.log(`  DIR:${dir} | T1(body):${t1} body=${body.toFixed(5)} avg=${avgBody.toFixed(5)} | T2(closePos):${t2} ratio=${closePos.toFixed(2)} | T3(slope):${t3} now=${current.close} vs 5ago=${price5CandlesAgo}`);
 
-  if (t1 && t2 && t3 && dir === trendDir) {
+  if (t1 && t2 && t3) {
     return { direction: dir, price: current.close, candleTime: current.datetime };
   }
   return null;
