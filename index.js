@@ -70,23 +70,23 @@ function analyzeSignal(candles) {
   const prev10  = candles.slice(-11, -1);
   const prevOne = candles[candles.length - 2];
 
-  // TRIGGER 1: Strong candle body — 20% above 10-candle average
+  // TRIGGER 1: Strong candle body — 10% above 10-candle average
   const body     = Math.abs(current.close - current.open);
   const avgBody  = prev10.reduce((a, c) => a + Math.abs(c.close - c.open), 0) / prev10.length;
-  const t1       = body > avgBody * 1.2;
+  const t1       = body > avgBody * 1.1;
   const dir      = current.close > current.open ? 'BUY' : 'SELL';
 
   // TRIGGER 2: Volume surge — 10% above 5-candle average
   const avgVol   = prev5.reduce((a, c) => a + c.volume, 0) / prev5.length;
   const t2       = current.volume > avgVol * 1.1;
 
-  // TRIGGER 3: Trend dominance — 4 of last 5 candles agree
+  // TRIGGER 3: Trend dominance — 3 of last 5 candles agree
   const bullCount = prev5.filter(c => c.close > c.open).length;
   const bearCount = prev5.filter(c => c.close < c.open).length;
   let trendDir    = null;
   let t3          = false;
-  if (bullCount >= 4) { trendDir = 'BUY';  t3 = true; }
-  if (bearCount >= 4) { trendDir = 'SELL'; t3 = true; }
+  if (bullCount >= 3) { trendDir = 'BUY';  t3 = true; }
+  if (bearCount >= 3) { trendDir = 'SELL'; t3 = true; }
 
   // TRIGGER 4: No whipsaw — previous candle agrees with direction
   const prevDir  = prevOne.close > prevOne.open ? 'BUY' : 'SELL';
