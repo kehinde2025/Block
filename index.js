@@ -31,7 +31,10 @@ function getWATHour() { return getWAT().getHours(); }
 function getWATTime() { return getWAT().toTimeString().slice(0, 8) + ' WAT'; }
 function getToday()   { return getWAT().toDateString(); }
 function getCurrentSession() {
-  const h = getWATHour();
+  const wat = getWAT();
+  const day = wat.getDay(); // 0=Sunday, 6=Saturday
+  if (day === 0 || day === 6) return null; // Weekend block
+  const h = wat.getHours();
   return SESSIONS.find(s => h >= s.start && h < s.end) || null;
 }
 
