@@ -10,8 +10,8 @@ const SUPABASE_KEY    = process.env.SUPABASE_KEY   || 'eyJhbGciOiJIUzI1NiIsInR5c
 
 const ASSET          = 'EUR/USD';
 const RSI_PERIOD     = 14;
-const RSI_OVERSOLD   = 30;
-const RSI_OVERBOUGHT = 70;
+const RSI_OVERSOLD   = 40;
+const RSI_OVERBOUGHT = 60;
 const COOLDOWN_MS    = 7 * 60 * 1000;
 
 const SESSIONS = [
