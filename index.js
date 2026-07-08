@@ -270,13 +270,15 @@ async function scanMarket() {
   const signal = analyzeSignal(candles);
   if (!signal) { console.log(`  No signal`); return; }
 
-  if (state.lastCandleTime === signal.candleTime) {
-    console.log(`  Same candle — blocked`);
+  // Bulletproof duplicate block — candle time + price + direction fingerprint
+  const signalFingerprint = `${signal.candleTime}-${signal.direction}-${signal.price.toFixed(5)}`;
+  if (state.lastCandleTime === signalFingerprint) {
+    console.log(`  Duplicate blocked: ${signalFingerprint}`);
     return;
   }
 
   state.lastSignalTime = now;
-  state.lastCandleTime = signal.candleTime;
+  state.lastCandleTime = signalFingerprint;
 
   const arrow = signal.direction === 'BUY' ? '▲' : '▼';
   const emoji = signal.direction === 'BUY' ? '🟢' : '🔴';
