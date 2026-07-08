@@ -95,11 +95,14 @@ function analyzeSignal(candles) {
 
   console.log(`  RSI: ${currentRSI.toFixed(2)} | Prev: ${prevRSI ? prevRSI.toFixed(2) : 'N/A'}`);
 
+  // Label strength — STRONG if 5+ points past threshold, WEAK if borderline
   if (prevRSI && prevRSI >= RSI_OVERSOLD && currentRSI < RSI_OVERSOLD) {
-    return { direction: 'BUY', price: current.close, candleTime: current.datetime, rsi: currentRSI };
+    const strength = currentRSI < 35 ? 'STRONG' : 'WEAK';
+    return { direction: 'BUY', price: current.close, candleTime: current.datetime, rsi: currentRSI, strength };
   }
   if (prevRSI && prevRSI <= RSI_OVERBOUGHT && currentRSI > RSI_OVERBOUGHT) {
-    return { direction: 'SELL', price: current.close, candleTime: current.datetime, rsi: currentRSI };
+    const strength = currentRSI > 65 ? 'STRONG' : 'WEAK';
+    return { direction: 'SELL', price: current.close, candleTime: current.datetime, rsi: currentRSI, strength };
   }
   return null;
 }
@@ -282,6 +285,7 @@ async function scanMarket() {
 
   const arrow = signal.direction === 'BUY' ? '▲' : '▼';
   const emoji = signal.direction === 'BUY' ? '🟢' : '🔴';
+  const strengthEmoji = signal.strength === 'STRONG' ? '🔥 Strength: STRONG' : '⚡ Strength: WEAK';
 
   // Save to Supabase first to get trade ID
   const tradeId = await saveTrade({
@@ -289,7 +293,7 @@ async function scanMarket() {
     direction:  signal.direction,
     session:    session.label,
     entry_time: new Date().toISOString(),
-    triggers:   { rsi: signal.rsi.toFixed(2) },
+    triggers:   { rsi: signal.rsi.toFixed(2), strength: signal.strength },
     result:     null,
   });
 
@@ -299,6 +303,7 @@ async function scanMarket() {
 <b>${arrow} ${signal.direction}</b> — EUR/USD
 💰 Price: <code>${signal.price.toFixed(5)}</code>
 📊 RSI: <code>${signal.rsi.toFixed(1)}</code>
+${strengthEmoji}
 ⏱ Duration: <b>5 minutes</b>
 📍 Session: ${session.name}
 🕐 Time: ${getWATTime()}
