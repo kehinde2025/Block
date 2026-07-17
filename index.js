@@ -5,6 +5,7 @@ const app = express();
 const TWELVE_KEY      = process.env.TWELVE_KEY     || '5effd4b99536477fa19f3dc37f5c9af1';
 const TELEGRAM_TOKEN  = process.env.TELEGRAM_TOKEN || '7710816793:AAE0obDgajHgJ1EaDM6cDzWzGkij80ToaW0';
 const CHAT_ID         = process.env.CHAT_ID        || '7974144973';
+const GROUP_ID        = process.env.GROUP_ID       || '-1003924196084';
 const SUPABASE_URL    = process.env.SUPABASE_URL   || 'https://cxjpbfzpvopykwxtqetn.supabase.co';
 const SUPABASE_KEY    = process.env.SUPABASE_KEY   || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN4anBiZnpwdm9weWt3eHRxZXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY5MTgsImV4cCI6MjA5NjY1MjkxOH0.JYFoXLJsbF_Ij_haj5IZQO9LCGnt839o7xpQRe17W8E';
 
