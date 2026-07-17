@@ -191,6 +191,31 @@ async function saveTrade(trade) {
   } catch(e) { console.error('Supabase save error:', e.message); return null; }
 }
 
+async function getLastFingerprint() {
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/signal_state?id=eq.1`, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+    });
+    const d = await r.json();
+    return d[0]?.fingerprint || null;
+  } catch(e) { return null; }
+}
+
+async function saveFingerprint(fingerprint) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/signal_state`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Prefer': 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify({ id: 1, fingerprint, updated_at: new Date().toISOString() }),
+    });
+  } catch(e) { console.error('Fingerprint save error:', e.message); }
+}
+
 async function updateTradeResult(tradeId, result) {
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/trades?id=eq.${tradeId}`, {
@@ -278,15 +303,17 @@ async function scanMarket() {
   const signal = analyzeSignal(candles);
   if (!signal) { console.log(`  No signal`); return; }
 
-  // Bulletproof duplicate block — direction + price + RSI (no candle time)
+  // Persistent duplicate block — check Supabase, not memory
   const signalFingerprint = `${signal.direction}-${signal.price.toFixed(5)}-${signal.rsi.toFixed(1)}`;
-  if (state.lastCandleTime === signalFingerprint) {
-    console.log(`  Duplicate blocked: ${signalFingerprint}`);
+  const lastFingerprint = await getLastFingerprint();
+  if (lastFingerprint === signalFingerprint) {
+    console.log(`  Duplicate blocked (DB): ${signalFingerprint}`);
     return;
   }
 
   state.lastSignalTime = now;
   state.lastCandleTime = signalFingerprint;
+  await saveFingerprint(signalFingerprint);
 
   const arrow = signal.direction === 'BUY' ? '▲' : '▼';
   const emoji = signal.direction === 'BUY' ? '🟢' : '🔴';
