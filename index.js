@@ -108,16 +108,21 @@ function analyzeSignal(candles) {
 }
 
 // ─── TELEGRAM ─────────────────────────────────────────────────────────────────
-async function sendTelegram(msg) {
+async function sendToChat(chatId, msg) {
   try {
     const r = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: CHAT_ID, text: msg, parse_mode: 'HTML' }),
+      body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'HTML' }),
     });
     const d = await r.json();
     return d.result?.message_id || null;
   } catch(e) { console.error('Telegram error:', e.message); return null; }
+}
+
+async function sendTelegram(msg) {
+  await sendToChat(CHAT_ID, msg);
+  await sendToChat(GROUP_ID, msg);
 }
 
 async function sendSignalWithButtons(msg, tradeId) {
@@ -273,8 +278,8 @@ async function scanMarket() {
   const signal = analyzeSignal(candles);
   if (!signal) { console.log(`  No signal`); return; }
 
-  // Bulletproof duplicate block — candle time + price + direction fingerprint
-  const signalFingerprint = `${signal.candleTime}-${signal.direction}-${signal.price.toFixed(5)}`;
+  // Bulletproof duplicate block — direction + price + RSI (no candle time)
+  const signalFingerprint = `${signal.direction}-${signal.price.toFixed(5)}-${signal.rsi.toFixed(1)}`;
   if (state.lastCandleTime === signalFingerprint) {
     console.log(`  Duplicate blocked: ${signalFingerprint}`);
     return;
@@ -311,7 +316,10 @@ ${strengthEmoji}
 <i>Enter within 30 seconds of signal</i>`;
 
   if (tradeId) {
+    // Personal chat gets buttons for logging
     await sendSignalWithButtons(message, tradeId);
+    // Group gets signal without buttons
+    await sendToChat(GROUP_ID, message);
   } else {
     await sendTelegram(message);
   }
