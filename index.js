@@ -9,7 +9,7 @@ const GROUP_ID        = process.env.GROUP_ID       || '-1003924196084';
 const SUPABASE_URL    = process.env.SUPABASE_URL   || 'https://cxjpbfzpvopykwxtqetn.supabase.co';
 const SUPABASE_KEY    = process.env.SUPABASE_KEY   || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN4anBiZnpwdm9weWt3eHRxZXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY5MTgsImV4cCI6MjA5NjY1MjkxOH0.JYFoXLJsbF_Ij_haj5IZQO9LCGnt839o7xpQRe17W8E';
 
-const ASSET          = 'EUR/USD';
+const ASSET          = 'XAU/USD';
 const RSI_PERIOD     = 14;
 const RSI_OVERSOLD   = 40;
 const RSI_OVERBOUGHT = 60;
@@ -322,7 +322,7 @@ async function scanMarket() {
 
   // Save to Supabase first to get trade ID
   const tradeId = await saveTrade({
-    asset:      'EUR/USD',
+    asset:      'XAU/USD',
     direction:  signal.direction,
     session:    session.label,
     entry_time: new Date().toISOString(),
@@ -333,7 +333,7 @@ async function scanMarket() {
   const message =
 `${emoji} <b>EDGEBLOCK SIGNAL</b>
 
-<b>${arrow} ${signal.direction}</b> — EUR/USD
+<b>${arrow} ${signal.direction}</b> — XAU/USD
 💰 Price: <code>${signal.price.toFixed(5)}</code>
 📊 RSI: <code>${signal.rsi.toFixed(1)}</code>
 ${strengthEmoji}
